@@ -41,6 +41,21 @@ make docker-up
 # Frontend: http://localhost:3000
 ```
 
+## Backend — Quick reference
+
+From the **backend** directory (`cd backend`):
+
+| Goal | Command |
+|------|---------|
+| Dev (tsx, watch) | `make dev` or `npm run dev` |
+| Dev (after build) | `npm run build` then `make dev-node` |
+| Production | `npm run build` then `npm start` |
+| Health check | `curl http://localhost:8000/health` |
+
+- **Dev (tsx)**: runs TypeScript with watch; no build step. First startup may take a few seconds.
+- **Dev (node)**: run `npm run build` once, then `make dev-node`; server restarts when `dist/` changes.
+- **Production**: build then `npm start` (runs `node dist/index.js`).
+
 ## Features
 
 - Streaming chat via SSE

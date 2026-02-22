@@ -1,4 +1,4 @@
-import { StateGraph, END, START, MemorySaver } from '@langchain/langgraph'
+import { StateGraph, END, START } from '@langchain/langgraph'
 import { ChatOpenAI } from '@langchain/openai'
 import { ToolMessage } from '@langchain/core/messages'
 import { AIMessage, HumanMessage, SystemMessage, type BaseMessage } from '@langchain/core/messages'
@@ -13,25 +13,41 @@ import {
 import { getToolDefinitions, getFilteredTools } from './tools/index.js'
 import { buildSystemPrompt } from './prompts.js'
 
-function createApp() {
-  const workflow = new StateGraph(AgentState)
-    .addNode('agent', agentNode)
-    .addNode('tools', toolsNode)
-    .addEdge(START, 'agent')
-    .addConditionalEdges('agent', shouldContinue, { continue: 'tools', end: END })
-    .addEdge('tools', 'agent')
-  const checkpointer = new MemorySaver()
-  return workflow.compile({ checkpointer })
-}
+let compiledApp: ReturnType<ReturnType<typeof createWorkflow>['compile']> | null = null
 
-async function agentNode(state: AgentStateType): Promise<Partial<AgentStateType>> {
+/** Single shared model instance to avoid allocating a new ChatOpenAI on every agent turn (OOM fix). */
+function getModel() {
   const toolDefs = getToolDefinitions()
-  const model = new ChatOpenAI({
+  return new ChatOpenAI({
     openAIApiKey: config.openai.apiKey,
     modelName: config.openai.chatModel,
     temperature: 0.2,
     maxTokens: 4096,
   }).bindTools(toolDefs)
+}
+let sharedModel: ReturnType<typeof getModel> | null = null
+
+function createWorkflow() {
+  return new StateGraph(AgentState)
+    .addNode('agent', agentNode)
+    .addNode('tools', toolsNode)
+    .addEdge(START, 'agent')
+    .addConditionalEdges('agent', shouldContinue, { continue: 'tools', end: END })
+    .addEdge('tools', 'agent')
+}
+
+function getApp() {
+  if (!compiledApp) {
+    sharedModel = getModel()
+    const workflow = createWorkflow()
+    // No checkpointer: we pass full conversation state each request. Avoids unbounded memory growth.
+    compiledApp = workflow.compile()
+  }
+  return compiledApp
+}
+
+async function agentNode(state: AgentStateType): Promise<Partial<AgentStateType>> {
+  const model = sharedModel ?? getModel()
 
   const messages: BaseMessage[] = []
   if (state.messages.length === 0 || state.messages[0].getType() !== 'system') {
@@ -116,7 +132,7 @@ export async function invokeMaxAgent(
   executionTime: number
   messages: BaseMessage[]
 }> {
-  const app = createApp()
+  const app = getApp()
   const historyMessages: BaseMessage[] = (conversationHistory ?? []).map(m =>
     m.role === 'user' ? new HumanMessage(m.content) : new AIMessage(m.content)
   )
@@ -131,9 +147,7 @@ export async function invokeMaxAgent(
   }
 
   const start = Date.now()
-  const result = await app.invoke(initialState, {
-    configurable: { thread_id: initialState.conversationId },
-  })
+  const result = await app.invoke(initialState)
   const executionTime = Date.now() - start
 
   const lastMessage = result.messages[result.messages.length - 1]
@@ -156,7 +170,7 @@ export async function* streamMaxAgent(
   conversationId?: string,
   conversationHistory?: Array<{ role: string; content: string }>
 ): AsyncGenerator<{ type: 'token' | 'done'; data: unknown }> {
-  const app = createApp()
+  const app = getApp()
   const historyMessages: BaseMessage[] = (conversationHistory ?? []).map(m =>
     m.role === 'user' ? new HumanMessage(m.content) : new AIMessage(m.content)
   )
@@ -171,7 +185,6 @@ export async function* streamMaxAgent(
   }
 
   const stream = await app.stream(initialState, {
-    configurable: { thread_id: initialState.conversationId },
     streamMode: ['messages', 'updates'],
   })
 
