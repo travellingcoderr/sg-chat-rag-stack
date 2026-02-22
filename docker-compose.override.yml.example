@@ -1,0 +1,7 @@
+# Copy to docker-compose.override.yml to override for local dev (e.g. mount backend src for hot reload)
+# services:
+#   backend:
+#     volumes:
+#       - ./backend/src:/app/src
+#     environment:
+#       NODE_ENV: development
